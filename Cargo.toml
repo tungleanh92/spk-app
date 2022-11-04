@@ -10,6 +10,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+ed25519-dalek = "1.0.1"
 near-sdk = "4.0.0"
 serde_json = "1.0"
 chrono = "0.4.0"

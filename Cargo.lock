@@ -1136,6 +1136,7 @@ name = "spk-app"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "ed25519-dalek",
  "near-contract-standards",
  "near-sdk",
  "serde_json",
