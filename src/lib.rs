@@ -15,8 +15,8 @@ use near_sdk::collections::LookupMap;
 use near_sdk::json_types::U128;
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{
-    bs58, env, ext_contract, near_bindgen, require, AccountId, Balance, BorshStorageKey, Gas,
-    Promise, PromiseError,
+    assert_one_yocto, bs58, env, ext_contract, near_bindgen, require, AccountId, Balance,
+    BorshStorageKey, Gas, Promise, PromiseError,
 };
 
 pub mod external;
@@ -85,6 +85,7 @@ pub struct Room {
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct Contract {
     pub owner: AccountId,
+    pub staking_address: AccountId,
     pub token_address: AccountId,
     pub verified_amount: Balance,
     pub room_list: LookupMap<u128, Room>,
@@ -99,23 +100,29 @@ pub enum StorageKey {
 #[near_bindgen]
 impl Contract {
     #[init]
-    pub fn new(_verified_amount: Balance, _token_address: AccountId) -> Self {
+    pub fn new(
+        _verified_amount: Balance,
+        _token_address: AccountId,
+        _staking_address: AccountId,
+    ) -> Self {
         Contract {
             owner: env::signer_account_id(),
+            staking_address: _staking_address,
             token_address: _token_address,
             verified_amount: _verified_amount,
             room_list: LookupMap::new(StorageKey::RoomIDKey),
         }
     }
 
-    // // Public method - returns the greeting saved, defaulting to DEFAULT_MESSAGE
+    #[payable]
     pub fn create_room(
-        mut self,
+        &mut self,
         _advisor: AccountId,
         _amount_per_minute: u128,
         _room_id: u128,
         _minutes_lasts: i64,
     ) {
+        assert_one_yocto();
         let _learner = env::signer_account_id();
 
         Self::query_staked_amount(&self, _advisor.clone());
@@ -152,7 +159,14 @@ impl Contract {
             );
     }
 
-    pub fn extend_meeting(&self, _amount_per_minute: u128, _room_id: u128, _minutes_lasts: i64) {
+    #[payable]
+    pub fn extend_meeting(
+        &mut self,
+        _amount_per_minute: u128,
+        _room_id: u128,
+        _minutes_lasts: i64,
+    ) {
+        assert_one_yocto();
         require!(
             self.room_list.contains_key(&_room_id) == true,
             "App: Room not existed!"
@@ -178,7 +192,9 @@ impl Contract {
             );
     }
 
-    pub fn end_room(&self, _room_id: u128, _learner_vote: u8, signature: Vec<u8>) {
+    #[payable]
+    pub fn end_room(&mut self, _room_id: u128, _learner_vote: u8, signature: Vec<u8>) {
+        assert_one_yocto();
         // https://stackoverflow.com/questions/70041130/how-to-verify-secp256k1-signed-message-in-smart-contract
         // verify signature of app creator
         let signature = ed25519_dalek::Signature::try_from(signature.as_ref())
@@ -208,7 +224,9 @@ impl Contract {
                 "App: Too early to reveive token!"
             );
 
-            // update interest in spk-stake
+            ext_stake_contract::ext(self.token_address.clone())
+                .with_static_gas(FT_TRANSFER_GAS)
+                .update_apr(env::signer_account_id(), _learner_vote);
 
             ext_ft_contract::ext(self.token_address.clone())
                 .with_static_gas(FT_TRANSFER_GAS)
@@ -220,12 +238,19 @@ impl Contract {
         require!(1 != 1, "There was an error verifying owner signature");
     }
 
-    pub fn revert_token(&self, _room_id: u128) {
+    #[payable]
+    pub fn revert_token(&mut self, _room_id: u128) {
+        assert_one_yocto();
         require!(
             self.room_list.contains_key(&_room_id) == true,
             "App: Room not existed!"
         );
         let mut room = self.room_list.get(&_room_id).unwrap();
+
+        require!(
+            Utc::now().timestamp().sub(room.start_time) < room.minutes_last,
+            "App: Room already ended!"
+        );
 
         ext_ft_contract::ext(self.token_address.clone())
             .with_static_gas(FT_TRANSFER_GAS)
