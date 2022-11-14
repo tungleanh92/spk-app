@@ -114,6 +114,7 @@ impl Contract {
         }
     }
 
+    // advisor sign
     #[payable]
     pub fn create_room(
         &mut self,
@@ -121,8 +122,15 @@ impl Contract {
         _amount_per_minute: u128,
         _room_id: u128,
         _minutes_lasts: i64,
+        _signature: Vec<u8>,
+        _signer: Vec<u8>,
     ) {
         assert_one_yocto();
+        require!(
+            Self::verify(&self, _signature, _signer) == true,
+            "There was an error verifying advisor's signature"
+        );
+
         let _learner = env::signer_account_id();
 
         Self::query_staked_amount(&self, _advisor.clone());
@@ -159,14 +167,22 @@ impl Contract {
             );
     }
 
+    // advisor sign
     #[payable]
     pub fn extend_meeting(
         &mut self,
         _amount_per_minute: u128,
         _room_id: u128,
         _minutes_lasts: i64,
+        _signature: Vec<u8>,
+        _signer: Vec<u8>,
     ) {
         assert_one_yocto();
+        require!(
+            Self::verify(&self, _signature, _signer) == true,
+            "There was an error verifying advisor's signature"
+        );
+        
         require!(
             self.room_list.contains_key(&_room_id) == true,
             "App: Room not existed!"
@@ -192,55 +208,57 @@ impl Contract {
             );
     }
 
+    // advisor sign
     #[payable]
-    pub fn end_room(&mut self, _room_id: u128, _learner_vote: u8, signature: Vec<u8>) {
+    pub fn end_room(
+        &mut self,
+        _room_id: u128,
+        _learner_vote: u8,
+        _signature: Vec<u8>,
+        _signer: Vec<u8>,
+    ) {
         assert_one_yocto();
-        // https://stackoverflow.com/questions/70041130/how-to-verify-secp256k1-signed-message-in-smart-contract
-        // verify signature of app creator
-        let signature = ed25519_dalek::Signature::try_from(signature.as_ref())
-            .expect("Signature should be a valid array of 64 bytes [13, 254, 123, ...]");
-        let public_key = ed25519_dalek::PublicKey::from_bytes(
-            &bs58::decode(
-                // private key of  app creator
-                "H5ANpdUoXVwhYBgAgEi1ieMQZKJbwxjPJtHX4vkVcSnF",
-            )
-            .into_vec()
-            .unwrap(),
-        )
-        .unwrap();
-        if let Ok(_) = public_key.verify(self.owner.as_bytes(), &signature) {
-            // succeed
-            require!(
-                self.room_list.contains_key(&_room_id) == true,
-                "App: Room not existed!"
-            );
-            let mut room = self.room_list.get(&_room_id).unwrap();
-            require!(room.claimed == false, "App: Already claimed!");
-            require!(room.reverted == false, "App: Already reverted!");
+        require!(
+            Self::verify(&self, _signature, _signer) == true,
+            "There was an error verifying advisor's signature"
+        );
+        
+        require!(
+            self.room_list.contains_key(&_room_id) == true,
+            "App: Room not existed!"
+        );
+        let mut room = self.room_list.get(&_room_id).unwrap();
+        require!(room.claimed == false, "App: Already claimed!");
+        require!(room.reverted == false, "App: Already reverted!");
 
-            let minutes_last = Utc::now().timestamp().sub(room.start_time);
-            require!(
-                minutes_last >= room.minutes_last,
-                "App: Too early to reveive token!"
-            );
+        // let minutes_last = Utc::now().timestamp().sub(room.start_time);
+        // require!(
+        //     minutes_last >= room.minutes_last,
+        //     "App: Too early to reveive token!"
+        // );
 
-            ext_stake_contract::ext(self.token_address.clone())
-                .with_static_gas(FT_TRANSFER_GAS)
-                .update_apr(env::signer_account_id(), _learner_vote);
+        ext_stake_contract::ext(self.token_address.clone())
+            .with_static_gas(FT_TRANSFER_GAS)
+            .update_apr(env::signer_account_id(), _learner_vote);
 
-            ext_ft_contract::ext(self.token_address.clone())
-                .with_static_gas(FT_TRANSFER_GAS)
-                .ft_transfer(room.advisor, U128::from(room.pending_amount), None);
+        ext_ft_contract::ext(self.token_address.clone())
+            .with_static_gas(FT_TRANSFER_GAS)
+            .ft_transfer(room.advisor, U128::from(room.pending_amount*95/100), None);
 
-            room.claimed = true;
-        }
-        // fail
-        require!(1 != 1, "There was an error verifying owner signature");
+        room.claimed = true;
     }
 
+    // advisor leave meeting at least 10 minutes then leaner can revert their tokens
+    // fe check time advisor leave. If time > 10 minutes, fe will allow learner do this function and create a signature for this fn
+    // admin sign
     #[payable]
-    pub fn revert_token(&mut self, _room_id: u128) {
+    pub fn revert_token(&mut self, _room_id: u128, _signature: Vec<u8>, _signer: Vec<u8>) {
         assert_one_yocto();
+        require!(
+            Self::verify(&self, _signature, _signer) == true,
+            "There was an error verifying admin's signature"
+        );
+
         require!(
             self.room_list.contains_key(&_room_id) == true,
             "App: Room not existed!"
@@ -256,7 +274,7 @@ impl Contract {
             .with_static_gas(FT_TRANSFER_GAS)
             .ft_transfer(
                 room.learner,
-                U128::from(room.amount_per_minute.mul(room.minutes_last as u128)),
+                U128::from(room.amount_per_minute.mul(room.minutes_last as u128)*95/100),
                 None,
             );
 
@@ -291,5 +309,28 @@ impl Contract {
         let amount = call_result.unwrap();
         require!(amount >= self.verified_amount, "App: Not an advisor!");
         amount
+    }
+
+    #[private]
+    pub fn verify(&self, _signature: Vec<u8>, _signer: Vec<u8>) -> bool {
+        // https://stackoverflow.com/questions/70041130/how-to-verify-secp256k1-signed-message-in-smart-contract
+        // verify signature of app creator
+        let signature = ed25519_dalek::Signature::try_from(_signature.as_ref())
+            .expect("Signature should be a valid array of 64 bytes [13, 254, 123, ...]");
+        let public_key = ed25519_dalek::PublicKey::from_bytes(
+            &bs58::decode(
+                // public key of app creator
+                // "H5ANpdUoXVwhYBgAgEi1ieMQZKJbwxjPJtHX4vkVcSnF",
+                _signer,
+            )
+            .into_vec()
+            .unwrap(),
+        )
+        .unwrap();
+        if let Ok(_) = public_key.verify(self.owner.as_bytes(), &signature) {
+            return true;
+        } else {
+            return false;
+        }
     }
 }
