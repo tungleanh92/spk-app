@@ -127,7 +127,7 @@ impl Contract {
     ) {
         assert_one_yocto();
         require!(
-            Self::verify(&self, _signature, _signer) == true,
+            Self::verify(&self, _signature, _signer, _advisor.clone()) == true,
             "There was an error verifying advisor's signature"
         );
 
@@ -178,16 +178,16 @@ impl Contract {
         _signer: Vec<u8>,
     ) {
         assert_one_yocto();
-        require!(
-            Self::verify(&self, _signature, _signer) == true,
-            "There was an error verifying advisor's signature"
-        );
         
         require!(
             self.room_list.contains_key(&_room_id) == true,
             "App: Room not existed!"
         );
         let mut room = self.room_list.get(&_room_id).unwrap();
+        require!(
+            Self::verify(&self, _signature, _signer, room.advisor) == true,
+            "There was an error verifying advisor's signature"
+        );
         room.minutes_last += _minutes_lasts;
         room.pending_amount += _amount_per_minute.mul(_minutes_lasts as u128);
 
@@ -218,16 +218,17 @@ impl Contract {
         _signer: Vec<u8>,
     ) {
         assert_one_yocto();
-        require!(
-            Self::verify(&self, _signature, _signer) == true,
-            "There was an error verifying advisor's signature"
-        );
         
         require!(
             self.room_list.contains_key(&_room_id) == true,
             "App: Room not existed!"
         );
         let mut room = self.room_list.get(&_room_id).unwrap();
+        require!(
+            Self::verify(&self, _signature, _signer, room.advisor.clone()) == true,
+            "There was an error verifying advisor's signature"
+        );
+        
         require!(room.claimed == false, "App: Already claimed!");
         require!(room.reverted == false, "App: Already reverted!");
 
@@ -255,7 +256,7 @@ impl Contract {
     pub fn revert_token(&mut self, _room_id: u128, _signature: Vec<u8>, _signer: Vec<u8>) {
         assert_one_yocto();
         require!(
-            Self::verify(&self, _signature, _signer) == true,
+            Self::verify(&self, _signature, _signer, self.owner.clone()) == true,
             "There was an error verifying admin's signature"
         );
 
@@ -312,22 +313,21 @@ impl Contract {
     }
 
     #[private]
-    pub fn verify(&self, _signature: Vec<u8>, _signer: Vec<u8>) -> bool {
+    pub fn verify(&self, _signature: Vec<u8>, _signer_public_key: Vec<u8>, _account_id: AccountId) -> bool {
         // https://stackoverflow.com/questions/70041130/how-to-verify-secp256k1-signed-message-in-smart-contract
         // verify signature of app creator
         let signature = ed25519_dalek::Signature::try_from(_signature.as_ref())
             .expect("Signature should be a valid array of 64 bytes [13, 254, 123, ...]");
         let public_key = ed25519_dalek::PublicKey::from_bytes(
             &bs58::decode(
-                // public key of app creator
-                // "H5ANpdUoXVwhYBgAgEi1ieMQZKJbwxjPJtHX4vkVcSnF",
-                _signer,
+                // public key "H5ANpdUoXVwhYBgAgEi1ieMQZKJbwxjPJtHX4vkVcSnF",
+                _signer_public_key,
             )
             .into_vec()
             .unwrap(),
         )
         .unwrap();
-        if let Ok(_) = public_key.verify(self.owner.as_bytes(), &signature) {
+        if let Ok(_) = public_key.verify(_account_id.as_bytes(), &signature) {
             return true;
         } else {
             return false;
