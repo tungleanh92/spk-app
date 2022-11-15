@@ -68,7 +68,7 @@ pub struct ClaimedTokenLog {
 }
 
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PartialEq)]
+#[derive(BorshDeserialize, BorshSerialize, PartialEq, Clone)]
 pub struct Room {
     advisor: AccountId,
     learner: AccountId,
@@ -185,12 +185,13 @@ impl Contract {
         );
         let mut room = self.room_list.get(&_room_id).unwrap();
         require!(
-            Self::verify(&self, _signature, _signer, room.advisor) == true,
+            Self::verify(&self, _signature, _signer, room.advisor.clone()) == true,
             "There was an error verifying advisor's signature"
         );
         room.minutes_last += _minutes_lasts;
         room.pending_amount += _amount_per_minute.mul(_minutes_lasts as u128);
 
+        self.room_list.insert(&_room_id, &room);
         ext_ft_contract::ext(self.token_address.clone())
             .with_static_gas(FT_TRANSFER_GAS)
             .ft_transfer_call(
@@ -244,9 +245,10 @@ impl Contract {
 
         ext_ft_contract::ext(self.token_address.clone())
             .with_static_gas(FT_TRANSFER_GAS)
-            .ft_transfer(room.advisor, U128::from(room.pending_amount*95/100), None);
+            .ft_transfer(room.advisor.clone(), U128::from(room.pending_amount*95/100), None);
 
         room.claimed = true;
+        self.room_list.insert(&_room_id, &room);
     }
 
     // advisor leave meeting at least 10 minutes then leaner can revert their tokens
@@ -274,12 +276,13 @@ impl Contract {
         ext_ft_contract::ext(self.token_address.clone())
             .with_static_gas(FT_TRANSFER_GAS)
             .ft_transfer(
-                room.learner,
+                room.learner.clone(),
                 U128::from(room.amount_per_minute.mul(room.minutes_last as u128)*95/100),
                 None,
             );
 
         room.reverted = true;
+        self.room_list.insert(&_room_id, &room);
     }
 
     #[private]
