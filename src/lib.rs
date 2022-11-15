@@ -8,7 +8,7 @@
 
 use std::ops::{Mul, Sub};
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use ed25519_dalek::Verifier;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::LookupMap;
@@ -16,7 +16,7 @@ use near_sdk::json_types::U128;
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{
     assert_one_yocto, bs58, env, ext_contract, near_bindgen, require, AccountId, Balance,
-    BorshStorageKey, Gas, Promise, PromiseError,
+    BorshStorageKey, Gas, Promise, PromiseError, PanicOnDefault
 };
 
 pub mod external;
@@ -46,9 +46,9 @@ pub struct RoomCreatedLog {
     advisor: AccountId,
     learner: AccountId,
     room_id: u128,
-    start_time: DateTime<Utc>,
+    start_time: i64,
     amount_per_minute: Balance,
-    minutes_last: DateTime<Utc>,
+    minutes_last: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -58,7 +58,7 @@ pub struct RoomExtendedLog {
     learner: AccountId,
     room_id: u128,
     amount_per_minute: Balance,
-    minutes_last: DateTime<Utc>,
+    minutes_last: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -80,9 +80,8 @@ pub struct Room {
     reverted: bool,
 }
 
-// Define the contract structure
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Contract {
     pub owner: AccountId,
     pub staking_address: AccountId,
@@ -96,7 +95,6 @@ pub enum StorageKey {
     RoomIDKey,
 }
 
-// Implement the contract structure
 #[near_bindgen]
 impl Contract {
     #[init]
