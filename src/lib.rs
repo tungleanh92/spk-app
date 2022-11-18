@@ -1,14 +1,3 @@
-/*
- * Example smart contract written in RUST
- *
- * Learn more about writing NEAR smart contracts with Rust:
- * https://near-docs.io/develop/Contract
- *
- */
-
-use std::ops::{Mul, Sub};
-
-use chrono::Utc;
 use ed25519_dalek::Verifier;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::LookupMap;
@@ -16,8 +5,10 @@ use near_sdk::json_types::U128;
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{
     assert_one_yocto, bs58, env, ext_contract, near_bindgen, require, AccountId, Balance,
-    BorshStorageKey, Gas, Promise, PromiseError, PanicOnDefault
+    BorshStorageKey, Gas, PanicOnDefault, Promise, PromiseError, PromiseOrValue, ONE_YOCTO,
 };
+use std::ops::{Mul, Sub};
+use std::time::SystemTime;
 
 pub mod external;
 pub use crate::external::*;
@@ -30,14 +21,6 @@ pub const FAUCET_CALLBACK_GAS: Gas = Gas(10_000_000_000_000);
 #[ext_contract(ext_ft_contract)]
 pub trait FungibleTokenCore {
     fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
-    fn ft_transfer_call(
-        &mut self,
-        receiver_id: AccountId,
-        amount: U128,
-        memo: Option<String>,
-        msg: String,
-    );
-    fn ft_resolve_transfer(&mut self, sender_id: AccountId, receiver_id: AccountId, amount: U128);
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -99,7 +82,7 @@ pub enum StorageKey {
 impl Contract {
     #[init]
     pub fn new(
-        _verified_amount: Balance,
+        _verified_amount: U128,
         _token_address: AccountId,
         _staking_address: AccountId,
     ) -> Self {
@@ -107,117 +90,80 @@ impl Contract {
             owner: env::signer_account_id(),
             staking_address: _staking_address,
             token_address: _token_address,
-            verified_amount: _verified_amount,
+            verified_amount: u128::from(_verified_amount),
             room_list: LookupMap::new(StorageKey::RoomIDKey),
         }
     }
 
-    // advisor sign
-    #[payable]
-    pub fn create_room(
+    // call ft_transfer_call on token contract to do create_room/extend_meeting fn called by token contract
+    pub fn ft_on_transfer(
         &mut self,
-        _advisor: AccountId,
-        _amount_per_minute: u128,
-        _room_id: u128,
-        _minutes_lasts: i64,
-        _signature: Vec<u8>,
-        _signer: Vec<u8>,
-    ) {
-        assert_one_yocto();
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+        _advisor: Option<AccountId>,
+        _amount_per_minute: Option<U128>,
+        _room_id: Option<U128>,
+        _minutes_lasts: Option<i64>,
+        _signature: Option<Vec<u8>>,
+        _signer: Option<Vec<u8>>,
+    ) -> PromiseOrValue<U128> {
+        let _amount_per_minute = u128::from(_amount_per_minute.unwrap());
+        let _room_id = u128::from(_room_id.unwrap());
         require!(
-            Self::verify(&self, _signature, _signer, _advisor.clone()) == true,
+            Self::verify(
+                &self,
+                _signature.unwrap(),
+                _signer.unwrap(),
+                _advisor.clone().unwrap()
+            ) == true,
             "There was an error verifying advisor's signature"
         );
 
-        let _learner = env::signer_account_id();
+        if msg == "create_room" {
+            Self::query_staked_amount(&self, _advisor.clone().unwrap());
 
-        Self::query_staked_amount(&self, _advisor.clone());
+            let _pending_amount = _amount_per_minute.mul(_minutes_lasts.unwrap() as u128);
 
-        let _pending_amount = _amount_per_minute.mul(_minutes_lasts as u128);
+            let room = Room {
+                advisor: _advisor.unwrap(),
+                learner: sender_id,
+                start_time: Self::now(),
+                amount_per_minute: _amount_per_minute,
+                minutes_last: _minutes_lasts.unwrap(),
+                pending_amount: _pending_amount,
+                claimed: false,
+                reverted: false,
+            };
 
-        let room = Room {
-            advisor: _advisor,
-            learner: _learner,
-            start_time: Utc::now().timestamp(),
-            amount_per_minute: _amount_per_minute,
-            minutes_last: _minutes_lasts,
-            pending_amount: _pending_amount,
-            claimed: false,
-            reverted: false,
-        };
-
-        self.room_list.insert(&_room_id, &room);
-
-        ext_ft_contract::ext(self.token_address.clone())
-            .with_static_gas(FT_TRANSFER_GAS)
-            .ft_transfer_call(
-                env::current_account_id(),
-                U128::from(_pending_amount),
-                None,
-                "spk_app".to_string(),
-            )
-            .then(
-                ext_ft_contract::ext(self.token_address.clone()).ft_resolve_transfer(
-                    room.learner,
-                    env::current_account_id(),
-                    U128::from(_pending_amount),
-                ),
+            self.room_list.insert(&_room_id, &room);
+        } else if msg == "extend_room" {
+            let mut room = self.room_list.get(&_room_id).unwrap();
+            require!(
+                self.room_list.contains_key(&_room_id) == true,
+                "App: Room not existed!"
             );
-    }
+            require!(sender_id == room.learner, "App: Invalid learner!");
+            room.minutes_last += _minutes_lasts.unwrap();
+            room.pending_amount += _amount_per_minute.mul(_minutes_lasts.unwrap() as u128);
 
-    // advisor sign
-    #[payable]
-    pub fn extend_meeting(
-        &mut self,
-        _amount_per_minute: u128,
-        _room_id: u128,
-        _minutes_lasts: i64,
-        _signature: Vec<u8>,
-        _signer: Vec<u8>,
-    ) {
-        assert_one_yocto();
-        
-        require!(
-            self.room_list.contains_key(&_room_id) == true,
-            "App: Room not existed!"
-        );
-        let mut room = self.room_list.get(&_room_id).unwrap();
-        require!(
-            Self::verify(&self, _signature, _signer, room.advisor.clone()) == true,
-            "There was an error verifying advisor's signature"
-        );
-        room.minutes_last += _minutes_lasts;
-        room.pending_amount += _amount_per_minute.mul(_minutes_lasts as u128);
+            self.room_list.insert(&_room_id, &room);
+        }
 
-        self.room_list.insert(&_room_id, &room);
-        ext_ft_contract::ext(self.token_address.clone())
-            .with_static_gas(FT_TRANSFER_GAS)
-            .ft_transfer_call(
-                env::current_account_id(),
-                U128::from(_amount_per_minute.mul(_minutes_lasts as u128)),
-                None,
-                "spk_app".to_string(),
-            )
-            .then(
-                ext_ft_contract::ext(self.token_address.clone()).ft_resolve_transfer(
-                    room.learner,
-                    env::current_account_id(),
-                    U128::from(_amount_per_minute.mul(_minutes_lasts as u128)),
-                ),
-            );
+        return PromiseOrValue::Value(U128(0));
     }
 
     // advisor sign
     #[payable]
     pub fn end_room(
         &mut self,
-        _room_id: u128,
+        _room_id: U128,
         _learner_vote: u8,
         _signature: Vec<u8>,
         _signer: Vec<u8>,
     ) {
         assert_one_yocto();
-        
+        let _room_id = u128::from(_room_id);
         require!(
             self.room_list.contains_key(&_room_id) == true,
             "App: Room not existed!"
@@ -227,7 +173,7 @@ impl Contract {
             Self::verify(&self, _signature, _signer, room.advisor.clone()) == true,
             "There was an error verifying advisor's signature"
         );
-        
+
         require!(room.claimed == false, "App: Already claimed!");
         require!(room.reverted == false, "App: Already reverted!");
 
@@ -243,7 +189,11 @@ impl Contract {
 
         ext_ft_contract::ext(self.token_address.clone())
             .with_static_gas(FT_TRANSFER_GAS)
-            .ft_transfer(room.advisor.clone(), U128::from(room.pending_amount*95/100), None);
+            .ft_transfer(
+                room.advisor.clone(),
+                U128::from(room.pending_amount * 95 / 100),
+                None,
+            );
 
         room.claimed = true;
         self.room_list.insert(&_room_id, &room);
@@ -253,8 +203,9 @@ impl Contract {
     // fe check time advisor leave. If time > 10 minutes, fe will allow learner do this function and create a signature for this fn
     // admin sign
     #[payable]
-    pub fn revert_token(&mut self, _room_id: u128, _signature: Vec<u8>, _signer: Vec<u8>) {
+    pub fn revert_token(&mut self, _room_id: U128, _signature: Vec<u8>, _signer: Vec<u8>) {
         assert_one_yocto();
+        let _room_id = u128::from(_room_id);
         require!(
             Self::verify(&self, _signature, _signer, self.owner.clone()) == true,
             "There was an error verifying admin's signature"
@@ -267,7 +218,7 @@ impl Contract {
         let mut room = self.room_list.get(&_room_id).unwrap();
 
         require!(
-            Utc::now().timestamp().sub(room.start_time) < room.minutes_last,
+            Self::now().sub(room.start_time) < room.minutes_last,
             "App: Room already ended!"
         );
 
@@ -275,7 +226,7 @@ impl Contract {
             .with_static_gas(FT_TRANSFER_GAS)
             .ft_transfer(
                 room.learner.clone(),
-                U128::from(room.amount_per_minute.mul(room.minutes_last as u128)*95/100),
+                U128::from(room.amount_per_minute.mul(room.minutes_last as u128) * 95 / 100),
                 None,
             );
 
@@ -314,7 +265,12 @@ impl Contract {
     }
 
     #[private]
-    pub fn verify(&self, _signature: Vec<u8>, _signer_public_key: Vec<u8>, _account_id: AccountId) -> bool {
+    pub fn verify(
+        &self,
+        _signature: Vec<u8>,
+        _signer_public_key: Vec<u8>,
+        _account_id: AccountId,
+    ) -> bool {
         // https://stackoverflow.com/questions/70041130/how-to-verify-secp256k1-signed-message-in-smart-contract
         // verify signature of app creator
         let signature = ed25519_dalek::Signature::try_from(_signature.as_ref())
@@ -333,5 +289,13 @@ impl Contract {
         } else {
             return false;
         }
+    }
+
+    #[private]
+    pub fn now() -> i64 {
+        return SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
     }
 }
