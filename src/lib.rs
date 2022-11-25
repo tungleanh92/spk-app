@@ -110,15 +110,15 @@ impl Contract {
     ) -> PromiseOrValue<U128> {
         let _amount_per_minute = u128::from(_amount_per_minute.unwrap());
         let _room_id = u128::from(_room_id.unwrap());
-        require!(
-            Self::verify(
-                &self,
-                _signature.unwrap(),
-                _signer.unwrap(),
-                _advisor.clone().unwrap()
-            ) == true,
-            "There was an error verifying advisor's signature"
-        );
+        // require!(
+        //     Self::verify(
+        //         &self,
+        //         _signature.unwrap(),
+        //         _signer.unwrap(),
+        //         _advisor.clone().unwrap()
+        //     ) == true,
+        //     "There was an error verifying advisor's signature"
+        // );
 
         if msg == "create_room" {
             Self::query_staked_amount(&self, _advisor.clone().unwrap());
@@ -169,10 +169,10 @@ impl Contract {
             "App: Room not existed!"
         );
         let mut room = self.room_list.get(&_room_id).unwrap();
-        require!(
-            Self::verify(&self, _signature, _signer, room.advisor.clone()) == true,
-            "There was an error verifying advisor's signature"
-        );
+        // require!(
+        //     Self::verify(&self, _signature, _signer, room.advisor.clone()) == true,
+        //     "There was an error verifying advisor's signature"
+        // );
 
         require!(room.claimed == false, "App: Already claimed!");
         require!(room.reverted == false, "App: Already reverted!");
@@ -206,10 +206,10 @@ impl Contract {
     pub fn revert_token(&mut self, _room_id: U128, _signature: Vec<u8>, _signer: Vec<u8>) {
         assert_one_yocto();
         let _room_id = u128::from(_room_id);
-        require!(
-            Self::verify(&self, _signature, _signer, self.owner.clone()) == true,
-            "There was an error verifying admin's signature"
-        );
+        // require!(
+        //     Self::verify(&self, _signature, _signer, self.owner.clone()) == true,
+        //     "There was an error verifying admin's signature"
+        // );
 
         require!(
             self.room_list.contains_key(&_room_id) == true,
